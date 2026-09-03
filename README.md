@@ -1,6 +1,6 @@
-# CallBreak+
+# CallBreak+ — deterministic game systems
 
-CallBreak+ is a native, landscape iOS implementation of the South Asian trick-taking game: one human player, three strategy-driven bots, five rounds, and optional regional house rules.
+CallBreak+ is a deterministic implementation of the South Asian trick-taking game: a headless rules state machine, three strategy-driven bots, five-round scoring, optional regional house rules, and rollback-aware persistence. The production client ships on iOS; the engineering boundaries remain independent of presentation.
 
 [Download on the App Store](https://apps.apple.com/us/app/call-break/id617853649) · [Product page](https://amitsapkota.me/callbreakplus/)
 
