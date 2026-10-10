@@ -4,14 +4,16 @@ struct CardView: View {
     let card: Card
     let isFaceUp: Bool
     let isLegal: Bool
-    let cardBackStyle: Int
+    let isInteractive: Bool
+    let cardBack: CardBack
     let highContrast: Bool
 
-    init(card: Card, isFaceUp: Bool = true, isLegal: Bool = true, cardBackStyle: Int = 0, highContrast: Bool = false) {
+    init(card: Card, isFaceUp: Bool = true, isLegal: Bool = true, isInteractive: Bool = false, cardBack: CardBack = .blue, highContrast: Bool = false) {
         self.card = card
         self.isFaceUp = isFaceUp
         self.isLegal = isLegal
-        self.cardBackStyle = cardBackStyle
+        self.isInteractive = isInteractive
+        self.cardBack = cardBack
         self.highContrast = highContrast
     }
 
@@ -30,12 +32,17 @@ struct CardView: View {
         "\(card.rank.symbol) of \(card.suit.name)"
     }
 
+    private var accessibilityHint: String {
+        guard isInteractive else { return "" }
+        return isLegal ? "Tap to play this card" : "Not playable in the current trick"
+    }
+
     var body: some View {
         if isFaceUp {
             faceView
                 .accessibilityLabel(accessibilityLabel)
-                .accessibilityAddTraits(isLegal ? .isButton : [])
-                .accessibilityHint(isLegal ? "Tap to play this card" : "Not playable in the current trick")
+                .accessibilityAddTraits(isInteractive && isLegal ? .isButton : [])
+                .accessibilityHint(accessibilityHint)
         } else {
             backView
                 .accessibilityLabel("Card back")
@@ -77,7 +84,14 @@ struct CardView: View {
             .padding(4)
         }
         .frame(width: Self.width, height: Self.height)
-        .opacity(isLegal ? 1.0 : (highContrast ? 0.45 : 0.72))
+        // A shade rather than transparency: the same on every felt and both
+        // suit colours, and no neighbouring card shows through.
+        .overlay {
+            if !isLegal {
+                RoundedRectangle(cornerRadius: Self.cornerRadius)
+                    .fill(.black.opacity(highContrast ? 0.55 : 0.35))
+            }
+        }
         .shadow(color: .black.opacity(0.18), radius: 2, y: 1)
     }
 
@@ -116,57 +130,11 @@ struct CardView: View {
                 .strokeBorder(Color.gray.opacity(0.3), lineWidth: 1)
 
             RoundedRectangle(cornerRadius: Self.cornerRadius - 2)
-                .fill(
-                    LinearGradient(
-                        colors: cardBackStyle == 0
-                            ? [Color(red: 0.12, green: 0.52, blue: 0.95), Color(red: 0.02, green: 0.22, blue: 0.56)]
-                            : [Color(red: 0.90, green: 0.22, blue: 0.16), Color(red: 0.46, green: 0.06, blue: 0.07)],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                )
+                .fill(LinearGradient(colors: cardBack.colors, startPoint: .topLeading, endPoint: .bottomTrailing))
                 .padding(3)
-                .overlay {
-                    if cardBackStyle == 0 {
-                        blueBackPattern
-                    } else {
-                        redBackPattern
-                    }
-                }
+                .overlay { CardBackPattern(back: cardBack) }
         }
         .frame(width: Self.width, height: Self.height)
-    }
-
-    private var blueBackPattern: some View {
-        GeometryReader { geo in
-            let w = geo.size.width
-            let h = geo.size.height
-            Path { path in
-                let inset: CGFloat = 8
-                path.addRect(CGRect(x: inset, y: inset, width: w - 2 * inset, height: h - 2 * inset))
-                path.move(to: CGPoint(x: w / 2, y: inset + 4))
-                path.addLine(to: CGPoint(x: w - inset - 4, y: h / 2))
-                path.addLine(to: CGPoint(x: w / 2, y: h - inset - 4))
-                path.addLine(to: CGPoint(x: inset + 4, y: h / 2))
-                path.closeSubpath()
-            }
-            .stroke(Color.white.opacity(0.5), lineWidth: 1)
-        }
-    }
-
-    private var redBackPattern: some View {
-        GeometryReader { geo in
-            let w = geo.size.width
-            let h = geo.size.height
-            Path { path in
-                path.move(to: CGPoint(x: w / 2, y: 8))
-                path.addLine(to: CGPoint(x: w - 8, y: h / 2))
-                path.addLine(to: CGPoint(x: w / 2, y: h - 8))
-                path.addLine(to: CGPoint(x: 8, y: h / 2))
-                path.closeSubpath()
-            }
-            .stroke(Color.white.opacity(0.5), lineWidth: 1)
-        }
     }
 }
 
@@ -183,8 +151,9 @@ struct CardView: View {
 
 #Preview("Card Back") {
     HStack(spacing: 10) {
-        CardView(card: Card(suit: .spades, rank: .ace), isFaceUp: false, cardBackStyle: 0)
-        CardView(card: Card(suit: .spades, rank: .ace), isFaceUp: false, cardBackStyle: 1)
+        ForEach(CardBack.allCases) { back in
+            CardView(card: Card(suit: .spades, rank: .ace), isFaceUp: false, cardBack: back)
+        }
     }
     .padding()
     .background(Color.green.opacity(0.3))

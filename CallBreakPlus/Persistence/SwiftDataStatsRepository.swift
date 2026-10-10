@@ -1,38 +1,6 @@
 import Foundation
 import SwiftData
 
-@Model
-final class GameRecord {
-    var won: Bool
-    var difficulty: String
-    var totalScore: Double
-    var bestRoundScore: Double
-    var totalBids: Int
-    var bidsMet: Int
-    var date: Date
-
-    init(won: Bool, difficulty: String, totalScore: Double, bestRoundScore: Double, totalBids: Int, bidsMet: Int, date: Date) {
-        self.won = won
-        self.difficulty = difficulty
-        self.totalScore = totalScore
-        self.bestRoundScore = bestRoundScore
-        self.totalBids = totalBids
-        self.bidsMet = bidsMet
-        self.date = date
-    }
-}
-
-@Model
-final class StreakRecord {
-    var currentWinStreak: Int
-    var longestWinStreak: Int
-
-    init(currentWinStreak: Int = 0, longestWinStreak: Int = 0) {
-        self.currentWinStreak = currentWinStreak
-        self.longestWinStreak = longestWinStreak
-    }
-}
-
 final class SwiftDataStatsRepository: StatsRepository, @unchecked Sendable {
     private let modelContainer: ModelContainer
 
@@ -60,7 +28,8 @@ final class SwiftDataStatsRepository: StatsRepository, @unchecked Sendable {
             bestRoundScore: bestRound,
             totalBids: result.bids.count,
             bidsMet: bidsMet,
-            date: result.date
+            date: result.date,
+            roundCount: result.roundCount
         )
         context.insert(record)
 
@@ -100,7 +69,8 @@ final class SwiftDataStatsRepository: StatsRepository, @unchecked Sendable {
         stats.bidsMet = records.reduce(0) { $0 + $1.bidsMet }
         stats.currentWinStreak = streak?.currentWinStreak ?? 0
         stats.longestWinStreak = streak?.longestWinStreak ?? 0
-        stats.averageScore = records.isEmpty ? 0 : records.reduce(0) { $0 + $1.totalScore } / Double(records.count)
+        let standardGames = records.filter { $0.roundCount == RuleSet.standard.roundCount }
+        stats.averageScore = standardGames.isEmpty ? 0 : standardGames.reduce(0) { $0 + $1.totalScore } / Double(standardGames.count)
 
         for record in records {
             switch record.difficulty {
@@ -130,8 +100,10 @@ final class SwiftDataStatsRepository: StatsRepository, @unchecked Sendable {
                 won: record.won,
                 difficulty: BotDifficulty(rawValue: record.difficulty) ?? .intermediate,
                 totalScore: record.totalScore,
-                bidAccuracy: record.totalBids == 0 ? 0 : Double(record.bidsMet) / Double(record.totalBids),
-                date: record.date
+                bidsMet: record.bidsMet,
+                totalBids: record.totalBids,
+                date: record.date,
+                roundCount: record.roundCount
             )
         }
     }
