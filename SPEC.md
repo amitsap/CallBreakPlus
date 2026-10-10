@@ -43,7 +43,7 @@ CallBreak (also known as Call Bridge) is a 4-player trick-taking card game popul
 ### Default House Rules
 
 - **Free Discard: ON** — described above
-- **Fair Deal: ON** — redeal if any player receives no spade or no face card; dealing retries are capped to guarantee progress
+- **Fair Deal: ON** — redeal if any player receives no spade, or no card ranked Jack or higher (J, Q, K, A); dealing retries are capped to guarantee progress
 - **Thok: ON** — a player who bids 8 or more and makes that bid wins the game immediately
 
 ### Scoring (per round, per player)
@@ -82,13 +82,13 @@ No accumulated overtrick penalty in v1. A common variant penalizes when fraction
 ### Layout (Landscape)
 - Edge-filling oval/green felt table with restrained wood surround
 - Human hand: large, partially edge-cropped hand along the bottom, sorted by suit then rank
-- Bot seats at left, top, right: card-back fans with compact name, bid, and tricks-won labels
+- Bot seats at left, top, right, at the felt edge: a small card-back fan above a plate with the name and a call meter (one pip per called trick, gold as tricks land, green with a tick once the call is made, overtricks as +n, numerals above 8)
 - Dealer indicated by a gold `D` chip at the appropriate seat
-- Center: enlarged four-position trick diamond that preserves the origin of every played card
-- Top chrome: Pause at left, round/trick status centered, score-sheet control at right
-- Score sheet slides in only on request; cumulative score is not duplicated at every seat
-- Previous-trick review appears contextually beside the trick area
-- Active turn is communicated by seat/hand glow and playable cards; a text hint appears only after hesitation
+- Center: a compact four-position trick cross that preserves the origin of every played card. The lead card carries a "Led" tab and the card winning right now a gold ring, updated as each card lands. A faint printed ring of arrows around the trick shows that play runs anti-clockwise
+- Top chrome: Pause and round/trick status at left; Last Trick and a standings chip with your rank and total at right
+- The standings chip opens a Standings panel (rank, round scores, this round's tricks of call, totals) that pauses play; bots' cumulative scores are not shown at their seats
+- Last Trick, available once a trick has been played, reviews the previous trick in an overlay
+- Active turn is communicated by seat/hand glow and playable cards; your nameplate says "Your turn" or "Choose your call" as soon as it is your move
 
 ### CardView
 - Reusable component with face and back states
@@ -97,20 +97,21 @@ No accumulated overtrick penalty in v1. A common variant penalizes when fraction
 - Card back: at least one alternate design (selectable in Settings)
 
 ### Animations
-- **Dealing:** cards fly from center deck to each seat with stagger; human cards flip face-up into fan
+- **Dealing:** cards fly from center deck to each seat with stagger; human cards flip face-up into fan. Tapping the felt finishes the deal at once and play continues to bidding
 - **Legal card affordance:** legal cards rise slightly with gentle scale + optional soft glow; illegal cards sit lower and dimmed
 - **Card play:** tapped card animates from hand to center trick position (matchedGeometryEffect)
 - **Bot play:** same animation from bot seat to center
 - **Trick collection:** highlight winning card, sweep trick to winner's corner
-- **Bidding:** a compact 1–13 call tray appears immediately above the human hand; bot calls remain visible in the tray and at their seats
-- **Round transition:** round-end summary card, then animate into next deal
+- **Bidding:** a 1–13 call tray between the top seat and the hand. A tap selects a call and a Call button commits it; with Bid Suggestion on, the suggestion starts selected. The tray states the stakes of the selected call ("Make 4 or more: +4 · Miss: −4", or the Thok win), the total called so far by the others, and rings the Thok calls in gold. Bot calls stay visible on their seats
+- **Round transition:** round-end summary card (your result, then standings by total with rank change), then animate into next deal
 - **Haptics:** light impact on card play, medium on trick win
-- **Pause:** suspends bot flow and exposes resume, sound, settings, statistics, play speed, and quit actions
+- **Pause:** suspends bot flow and exposes resume, quit, a sound switch, a play-speed control, how to play, settings and statistics
+- **Game over:** the result, your calls made, best round and win streak, Play again and Menu, and the final standings with medals; confetti when you win, unless Reduce Motion is on
 
 All animation timing driven by ViewModel, decoupled from engine.
 
 ### Settings Screen
-- Bot difficulty: Beginner / Intermediate / Advanced
+- Bot difficulty: Easy / Medium / Hard (the Beginner, Intermediate and Advanced presets)
 - Sound: on/off
 - Haptics: on/off
 - Player name (text field)
@@ -126,12 +127,20 @@ All animation timing driven by ViewModel, decoupled from engine.
 - Longest win streak
 - Per-difficulty breakdowns
 
+## Monetization
+
+- The whole game is free, with no ads, ever. Every feature that shipped in 2.1 stays free for everyone.
+- One optional non-consumable in-app purchase, **Call Break+ Pro** (`edu.amitsapkota.callbreakplus.pro`), adds only new features: the Royal, Maroon and Midnight tables, six card backs, Insights in Statistics, and two rule variants, game length (3, 5 or 10 rounds) and the Thok call (8 to 13). It costs US$2.99, ₹199 in India and US$0.99 in Nepal, with Family Sharing on.
+- Rule variants apply from the next game. Each game records its length; the Insights score chart counts 5-round games only, and game lists label other lengths.
+- Pro shows only where its features live (Settings → Tables & decks, House rules and About, and the Insights card in Statistics), the same from the menu or Pause, plus one dismissible game-over card, once ever, from the 10th completed game. Nothing about Pro appears on the table, in the bid tray, between rounds or on Pause itself.
+- Losing Pro (a refund, or Family Sharing ending) falls back to the free table, back and rules without rewriting the stored choices; getting Pro back restores them.
+- StoreKit 2 only: no SDK, no server, no tracking. Gating lives in the ViewModel and Views, never in Engine or Bots.
+
 ## Out of Scope (v1)
 
 - Online/multiplayer
 - Game Center integration
-- In-app purchases
-- Sound effect asset pipeline (audio interface stubbed only)
+- Audio asset pipeline (every sound is synthesized in code)
 - iPad-specific layout tuning beyond "it works in landscape"
 - Localization beyond English
 - Accumulated overtrick penalty variant

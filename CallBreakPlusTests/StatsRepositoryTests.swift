@@ -7,26 +7,49 @@ import SwiftData
 @Suite("Stats Repository")
 struct StatsRepositoryTests {
     private func makeContainer() -> ModelContainer {
-        try! ModelContainer(
-            for: GameRecord.self, StreakRecord.self,
-            configurations: ModelConfiguration(isStoredInMemoryOnly: true)
-        )
+        try! StatsMigrationPlan.container(ModelConfiguration(isStoredInMemoryOnly: true))
     }
 
     private func makeFileBackedContainer() -> (container: ModelContainer, storeURL: URL) {
         let url = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString + ".store")
-        let container = try! ModelContainer(
-            for: GameRecord.self, StreakRecord.self,
-            configurations: ModelConfiguration(url: url)
-        )
+        let container = try! StatsMigrationPlan.container(ModelConfiguration(url: url))
         return (container, url)
     }
 
-    private func makeResult(won: Bool, difficulty: BotDifficulty = .intermediate, date: Date) -> GameResult {
+    private func makeResult(won: Bool, difficulty: BotDifficulty = .intermediate, date: Date, totalScore: Double? = nil, roundCount: Int = 5) -> GameResult {
         GameResult(
-            won: won, difficulty: difficulty, totalScore: won ? 30 : 10,
-            roundScores: [30], bids: [3], tricksWon: won ? [3] : [2], date: date
+            won: won, difficulty: difficulty, totalScore: totalScore ?? (won ? 30 : 10),
+            roundScores: [30], bids: [3], tricksWon: won ? [3] : [2], date: date, roundCount: roundCount
         )
+    }
+
+    @Test func recordedGameKeepsItsLength() async throws {
+        let repo = SwiftDataStatsRepository(modelContainer: makeContainer())
+        try await repo.recordGameResult(makeResult(won: true, date: Date(timeIntervalSince1970: 0), roundCount: 10))
+        try await repo.recordGameResult(makeResult(won: true, date: Date(timeIntervalSince1970: 1), roundCount: 3))
+
+        let recent = try await repo.fetchRecentGames(limit: 2)
+        #expect(recent.map(\.roundCount) == [3, 10])
+    }
+
+    /// A game's length scales its score, so the average leaves out 3- and 10-round games.
+    @Test func averageScoreCountsFiveRoundGamesOnly() async throws {
+        let repo = SwiftDataStatsRepository(modelContainer: makeContainer())
+        try await repo.recordGameResult(makeResult(won: true, date: Date(timeIntervalSince1970: 0), totalScore: 20))
+        try await repo.recordGameResult(makeResult(won: true, date: Date(timeIntervalSince1970: 1), totalScore: 30))
+        try await repo.recordGameResult(makeResult(won: true, date: Date(timeIntervalSince1970: 2), totalScore: 70, roundCount: 10))
+        try await repo.recordGameResult(makeResult(won: false, date: Date(timeIntervalSince1970: 3), totalScore: 2, roundCount: 3))
+
+        let stats = try await repo.fetchStats()
+        #expect(stats.gamesPlayed == 4)
+        #expect(stats.averageScore == 25)
+    }
+
+    @Test func averageScoreIsZeroWithoutFiveRoundGames() async throws {
+        let repo = SwiftDataStatsRepository(modelContainer: makeContainer())
+        try await repo.recordGameResult(makeResult(won: true, date: Date(timeIntervalSince1970: 0), totalScore: 70, roundCount: 10))
+
+        #expect(try await repo.fetchStats().averageScore == 0)
     }
 
     @Test func recordingAWonGameUpdatesStatsAndStreak() async throws {

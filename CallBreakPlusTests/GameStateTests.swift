@@ -173,6 +173,48 @@ struct GameStateTests {
         #expect(viewModel.dealtCardCount == 52)
     }
 
+    @Test @MainActor func cardTapDuringOwnBidExplainsNothing() {
+        var state = GameState()
+        state.currentRound = RoundState(roundNumber: 1, dealer: .left, hands: testHands())
+        state.phase = .bidding(nextBidder: .bottom)
+        let viewModel = GameViewModel(defaults: scratchDefaults())
+        viewModel.gameState = state
+
+        viewModel.explainWhyCardIsUnavailable(testHands()[.bottom]![0])
+
+        #expect(viewModel.invalidMoveMessage == nil)
+    }
+
+    /// The hand view dims cards and marks them interactive only when this is non-empty.
+    @Test @MainActor func noLegalCardsDuringYourBid() {
+        var state = GameState()
+        state.currentRound = RoundState(roundNumber: 1, dealer: .left, hands: testHands())
+        state.phase = .bidding(nextBidder: .bottom)
+        let viewModel = GameViewModel(defaults: scratchDefaults())
+        viewModel.gameState = state
+
+        #expect(viewModel.isHumanTurn)
+        #expect(viewModel.legalCards.isEmpty)
+    }
+
+    @Test @MainActor func illegalTapOnYourTurnExplainsTheRestriction() {
+        var round = RoundState(roundNumber: 1, dealer: .left, hands: testHands())
+        round.hands[.bottom] = [card(.five, .spades), card(.king, .spades), card(.two, .diamonds)]
+        round.currentTrick = Trick(ledSuit: .hearts, plays: [
+            TrickPlay(seat: .top, card: card(.ten, .hearts)),
+            TrickPlay(seat: .left, card: card(.jack, .spades)),
+        ])
+        var state = GameState()
+        state.currentRound = round
+        state.phase = .playing(leader: .top, currentTurn: .bottom)
+        let viewModel = GameViewModel(defaults: scratchDefaults())
+        viewModel.gameState = state
+
+        viewModel.explainWhyCardIsUnavailable(card(.five, .spades))
+
+        #expect(viewModel.invalidMoveMessage == "Beat the J♠: play your K♠.")
+    }
+
     @Test @MainActor func difficultySnapshotsAtGameStartNotAtPickerChange() {
         let viewModel = GameViewModel(defaults: scratchDefaults())
 
@@ -254,6 +296,256 @@ struct GameStateTests {
         try await Task.sleep(for: .milliseconds(220))
         #expect(!viewModel.showingRoundSummary)
         viewModel.pauseGame()
+    }
+
+    @Test @MainActor func skippingTheDealFinishesItAndContinuesToBidding() async throws {
+        let viewModel = GameViewModel(defaults: scratchDefaults())
+        viewModel.startNewGame()
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(viewModel.isDealing)
+        #expect(viewModel.dealtCardCount < 52)
+
+        viewModel.skipDeal()
+        try await Task.sleep(for: .milliseconds(150))
+        #expect(viewModel.dealtCardCount == 52)
+        #expect(viewModel.dealingCardSeat == nil)
+
+        // An unskipped deal takes about 3.4 s; this is 1 s in.
+        try await Task.sleep(for: .milliseconds(550))
+        #expect(!viewModel.isDealing)
+        if case .bidding = viewModel.phase {
+            // correct
+        } else {
+            Issue.record("Expected bidding after the skipped deal, got \(viewModel.phase)")
+        }
+        viewModel.stopGame()
+    }
+
+    @Test func callStakesSpellOutWinAndLoss() {
+        #expect(GameViewModel.callStakes(bid: 4, thokThreshold: 8) == "Make 4 or more: +4 · Miss: −4")
+        #expect(GameViewModel.callStakes(bid: 8, thokThreshold: 8) == "Make 8 or more: Thok, you win · Miss: −8")
+        #expect(GameViewModel.callStakes(bid: 9, thokThreshold: nil) == "Make 9 or more: +9 · Miss: −9")
+    }
+
+    @Test @MainActor func calledSoFarCountsOnlyTheOtherSeats() {
+        var state = GameState()
+        state.currentRound = RoundState(roundNumber: 1, dealer: .bottom, hands: testHands())
+        state.currentRound?.bids = [.right: 3, .top: 1, .left: 3]
+        let viewModel = GameViewModel(defaults: scratchDefaults())
+        viewModel.gameState = state
+        #expect(viewModel.calledSoFar == 7)
+
+        viewModel.gameState.currentRound?.bids[.bottom] = 4
+        #expect(viewModel.calledSoFar == 7)
+    }
+
+    @Test @MainActor func skipDealOutsideTheDealDoesNothing() async throws {
+        var state = GameState()
+        state.currentRound = RoundState(roundNumber: 1, dealer: .bottom, hands: testHands())
+        state.phase = .bidding(nextBidder: .bottom)
+        let viewModel = GameViewModel(defaults: scratchDefaults())
+        viewModel.gameState = state
+
+        viewModel.skipDeal()
+        #expect(viewModel.dealtCardCount == 0)
+        #expect(viewModel.phase == .bidding(nextBidder: .bottom))
+    }
+
+    @Test @MainActor func winningSeatFollowsThePartialTrick() {
+        var state = GameState()
+        state.currentRound = RoundState(roundNumber: 1, dealer: .bottom, hands: testHands())
+        state.phase = .playing(leader: .top, currentTurn: .bottom)
+        state.currentRound?.currentTrick = Trick(ledSuit: .hearts, plays: [
+            TrickPlay(seat: .top, card: Card(suit: .hearts, rank: .nine)),
+            TrickPlay(seat: .left, card: Card(suit: .hearts, rank: .king)),
+        ])
+        let viewModel = GameViewModel(defaults: scratchDefaults())
+        viewModel.gameState = state
+
+        #expect(viewModel.trickLeader == .top)
+        #expect(viewModel.winningTrickSeat == .left)
+
+        viewModel.gameState.currentRound?.currentTrick = nil
+        #expect(viewModel.trickLeader == nil)
+        #expect(viewModel.winningTrickSeat == nil)
+    }
+
+    @Test @MainActor func standingsPanelStopsAndResumesBotFlow() async throws {
+        var state = GameState()
+        state.currentRound = RoundState(roundNumber: 1, dealer: .bottom, hands: testHands())
+        state.phase = .bidding(nextBidder: .right)
+        let viewModel = GameViewModel(defaults: scratchDefaults())
+        viewModel.gameState = state
+
+        viewModel.resumeGame()
+        viewModel.openStandings()
+        try await Task.sleep(for: .milliseconds(450))
+        #expect(viewModel.showingStandings)
+        #expect(viewModel.currentRound?.bids.isEmpty == true)
+
+        viewModel.closeStandings()
+        try await Task.sleep(for: .milliseconds(450))
+        #expect(viewModel.currentRound?.bids[.right] != nil)
+        viewModel.pauseGame()
+    }
+
+    @Test @MainActor func standingsPanelRejectsDealingAndGameOver() {
+        var state = GameState()
+        state.currentRound = RoundState(roundNumber: 1, dealer: .bottom, hands: testHands())
+        state.phase = .bidding(nextBidder: .bottom)
+        let viewModel = GameViewModel(defaults: scratchDefaults())
+        viewModel.gameState = state
+        viewModel.isDealing = true
+
+        viewModel.openStandings()
+        #expect(!viewModel.showingStandings)
+
+        viewModel.isDealing = false
+        viewModel.gameState.phase = .gameOver
+        viewModel.openStandings()
+        #expect(!viewModel.showingStandings)
+    }
+
+    @Test @MainActor func duplicateStandingsCloseKeepsHumanPlayingTurnStable() async throws {
+        var state = GameState()
+        state.currentRound = RoundState(roundNumber: 1, dealer: .bottom, hands: testHands())
+        state.phase = .playing(leader: .bottom, currentTurn: .bottom)
+        let viewModel = GameViewModel(defaults: scratchDefaults())
+        viewModel.gameState = state
+
+        viewModel.openStandings()
+        viewModel.closeStandings()
+        viewModel.closeStandings()
+        try await Task.sleep(for: .milliseconds(50))
+
+        #expect(!viewModel.showingStandings)
+        #expect(viewModel.phase == .playing(leader: .bottom, currentTurn: .bottom))
+        viewModel.pauseGame()
+    }
+
+    @Test @MainActor func standingsRankTiesAndCountTheRoundOnSummary() {
+        let viewModel = GameViewModel(defaults: scratchDefaults())
+        viewModel.gameState.scoreTenths = [.bottom: 31, .right: 31, .top: 81, .left: -10]
+
+        #expect(viewModel.standingsOrder == [.top, .bottom, .right, .left])
+        #expect(viewModel.standingRank(.top) == (1, false))
+        #expect(viewModel.standingRank(.bottom) == (2, true))
+        #expect(viewModel.standingRank(.right) == (2, true))
+        #expect(viewModel.standingRank(.left) == (4, false))
+
+        viewModel.roundSummaryNumber = 2
+        viewModel.roundSummaryScores = [
+            (seat: .bottom, bid: 6, tricks: 7, score: 6.1),
+            (seat: .right, bid: 2, tricks: 1, score: -2),
+            (seat: .top, bid: 3, tricks: 2, score: -3),
+            (seat: .left, bid: 2, tricks: 2, score: 2),
+        ]
+        #expect(viewModel.standingTotalsTenths[.bottom] == 31)
+        #expect(viewModel.roundScoreTenths(roundNumber: 2, seat: .bottom) == nil)
+
+        viewModel.showingRoundSummary = true
+        #expect(viewModel.standingTotalsTenths[.bottom] == 92)
+        #expect(viewModel.roundScoreTenths(roundNumber: 2, seat: .bottom) == 61)
+        #expect(viewModel.standingRank(.bottom) == (1, false))
+    }
+
+    @Test @MainActor func roundSummaryRankChangeComparesWithTheStandingsBeforeTheRound() {
+        let viewModel = GameViewModel(defaults: scratchDefaults())
+        viewModel.gameState.scoreTenths = [.bottom: 31, .right: 31, .top: 81, .left: -10]
+        viewModel.roundSummaryNumber = 2
+        viewModel.roundSummaryScores = [
+            (seat: .bottom, bid: 6, tricks: 7, score: 6.1),
+            (seat: .right, bid: 2, tricks: 1, score: -2),
+            (seat: .top, bid: 3, tricks: 2, score: -3),
+            (seat: .left, bid: 2, tricks: 2, score: 2),
+        ]
+        #expect(viewModel.summaryRankChange(.bottom) == nil)
+
+        viewModel.showingRoundSummary = true
+        #expect(viewModel.summaryRankChange(.bottom) == 1)
+        #expect(viewModel.summaryRankChange(.top) == -1)
+        #expect(viewModel.summaryRankChange(.right) == -1)
+        #expect(viewModel.summaryRankChange(.left) == 0)
+
+        viewModel.roundSummaryNumber = 1
+        #expect(viewModel.summaryRankChange(.bottom) == nil)
+    }
+
+    @Test func finalStandingsRankByTotalWithSharedPlaces() {
+        let places = GameViewModel.finalStandings(
+            totals: [.bottom: 121, .right: 173, .top: 121, .left: -20], instantWinner: nil
+        )
+        #expect(places.map(\.seat) == [.right, .bottom, .top, .left])
+        #expect(places.map(\.rank) == [1, 2, 2, 4])
+        #expect(places.map(\.tied) == [false, true, true, false])
+    }
+
+    @Test func finalStandingsPutAThokWinnerFirstWhateverTheTotals() {
+        let places = GameViewModel.finalStandings(
+            totals: [.bottom: 50, .right: 80, .top: 120, .left: 10], instantWinner: .left
+        )
+        #expect(places.map(\.seat) == [.left, .top, .right, .bottom])
+        #expect(places.map(\.rank) == [1, 2, 3, 4])
+    }
+
+    @Test func winStreakIsANewBestOnlyPastAnEarlierBest() {
+        func stats(current: Int, longest: Int) -> PlayerStats {
+            var stats = PlayerStats()
+            stats.currentWinStreak = current
+            stats.longestWinStreak = longest
+            return stats
+        }
+        let pastBest = GameViewModel.winStreak(before: stats(current: 2, longest: 2), after: stats(current: 3, longest: 3), won: true)
+        #expect(pastBest == .init(current: 3, best: 3, isNewBest: true))
+        let equalsBest = GameViewModel.winStreak(before: stats(current: 2, longest: 3), after: stats(current: 3, longest: 3), won: true)
+        #expect(!equalsBest.isNewBest)
+        let firstWin = GameViewModel.winStreak(before: stats(current: 0, longest: 0), after: stats(current: 1, longest: 1), won: true)
+        #expect(!firstWin.isNewBest)
+        let unknownBefore = GameViewModel.winStreak(before: nil, after: stats(current: 4, longest: 4), won: true)
+        #expect(!unknownBefore.isNewBest)
+        let loss = GameViewModel.winStreak(before: stats(current: 3, longest: 3), after: stats(current: 0, longest: 3), won: false)
+        #expect(loss == .init(current: 0, best: 3, isNewBest: false))
+    }
+
+    @Test @MainActor func yourGameCountsCallsMadeAndTheBestRound() {
+        let viewModel = GameViewModel(defaults: scratchDefaults())
+        #expect(viewModel.yourGame == nil)
+
+        let hands = testHands()
+        let results: [(bid: Int, tricks: Int)] = [(3, 3), (4, 2), (2, 5), (5, 5)]
+        viewModel.gameState.roundStates = results.enumerated().map { index, result in
+            var round = RoundState(roundNumber: index + 1, dealer: .bottom, hands: hands)
+            round.bids = [.bottom: result.bid]
+            round.tricksWon = [.bottom: result.tricks]
+            return round
+        }
+        viewModel.gameState.phase = .gameOver
+        let game = viewModel.yourGame
+        #expect(game?.callsMade == 3)
+        #expect(game?.rounds == 4)
+        #expect(game?.bestRound == 5)
+    }
+
+    @Test @MainActor func gameOverRecordsTheWinStreak() async throws {
+        let repository = RecordingStatsRepository()
+        let viewModel = GameViewModel(statsRepository: repository, defaults: scratchDefaults())
+        viewModel.gameState = stateWithCompletedRound(priorRoundCount: 4)
+
+        viewModel.resumeGame()
+        try await Task.sleep(for: .milliseconds(700))
+        #expect(viewModel.showingGameOver)
+        #expect(viewModel.gameOverStreak == .init(current: 0, best: 0, isNewBest: false))
+
+        viewModel.startNewGame()
+        #expect(viewModel.gameOverStreak == nil)
+        viewModel.stopGame()
+    }
+
+    @Test func rankLabels() {
+        #expect(GameViewModel.rankLabel(rank: 1, tied: false) == "1st")
+        #expect(GameViewModel.rankLabel(rank: 2, tied: true) == "=2nd")
+        #expect(GameViewModel.rankLabel(rank: 3, tied: false) == "3rd")
+        #expect(GameViewModel.rankLabel(rank: 4, tied: false) == "4th")
     }
 
     @Test @MainActor func lastTrickViewerStopsAndResumesBotFlow() async throws {
@@ -424,6 +716,21 @@ struct GameStateTests {
 
         try await Task.sleep(for: .milliseconds(600))
         #expect(viewModel.showingGameOver)
+    }
+
+    @Test @MainActor func finishedGameRecordsItsLength() async throws {
+        let repository = RecordingStatsRepository()
+        let viewModel = GameViewModel(statsRepository: repository, defaults: scratchDefaults())
+        var rules = RuleSet.standard
+        rules.roundCount = 3
+        viewModel.gameState = stateWithCompletedRound(rules: rules, priorRoundCount: 2)
+
+        viewModel.resumeGame()
+        try await Task.sleep(for: .milliseconds(100))
+        viewModel.pauseGame()
+
+        #expect(repository.recorded.map(\.roundCount) == [3])
+        #expect(repository.recorded.first?.roundScores.count == 3)
     }
 }
 
@@ -598,6 +905,7 @@ func testHands() -> [Seat: [Card]] {
 }
 
 func stateWithCompletedRound(
+    rules: RuleSet = .standard,
     priorRoundCount: Int = 0,
     bids: [Seat: Int] = [.bottom: 3, .right: 2, .top: 2, .left: 1],
     tricksWon: [Seat: Int] = [.bottom: 3, .right: 2, .top: 2, .left: 6]
@@ -609,7 +917,7 @@ func stateWithCompletedRound(
     round.tricksWon = tricksWon
     round.completedTricks = Array(repeating: completedTrick, count: 13)
 
-    var state = GameState()
+    var state = GameState(rules: rules)
     state.roundStates = (0..<priorRoundCount).map {
         RoundState(roundNumber: $0 + 1, dealer: .bottom, hands: hands)
     }
@@ -620,13 +928,16 @@ func stateWithCompletedRound(
 
 @MainActor
 final class RecordingStatsRepository: StatsRepository, @unchecked Sendable {
-    private(set) var recordedGameCount = 0
+    private(set) var recorded: [GameResult] = []
+    var recordedGameCount: Int { recorded.count }
+    /// Games already in the store before this test's.
+    var priorGames = 0
 
     func recordGameResult(_ result: GameResult) async throws {
-        recordedGameCount += 1
+        recorded.append(result)
     }
 
-    func fetchStats() async throws -> PlayerStats { PlayerStats() }
+    func fetchStats() async throws -> PlayerStats { PlayerStats(gamesPlayed: priorGames + recorded.count) }
 
     func fetchRecentGames(limit: Int) async throws -> [GameSummary] { [] }
 

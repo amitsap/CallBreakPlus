@@ -1,298 +1,277 @@
 import SwiftUI
 
 struct MainMenuView: View {
+    @Bindable var viewModel: GameViewModel
+    /// Bumped by the parent when the stats may have changed (a panel closed), so the menu refetches.
+    let statsVersion: Int
     let onNewGame: () -> Void
+    let onHowToPlay: () -> Void
     let onSettings: () -> Void
     let onStats: () -> Void
 
-    @State private var showingHowToPlay = false
-    @State private var suitPulse = false
-    @State private var howToPlayLabelIndex = 0
-    @State private var labelShuffleTimer: Timer?
+    @State private var stats: MenuStats = .loading
     @AppStorage("onboarding.hasSeenRules") private var hasSeenRules = false
 
-    private let howToPlayLabels = ["How to Play", "खेल्ने तरिका", "कैसे खेलें"]
+    enum MenuStats {
+        case loading, unavailable
+        case loaded(PlayerStats)
+    }
 
     var body: some View {
         ZStack {
-            RadialGradient(
-                colors: [
-                    Color(red: 0.08, green: 0.32, blue: 0.10),
-                    Color(red: 0.04, green: 0.18, blue: 0.05),
-                    Color(red: 0.02, green: 0.10, blue: 0.03),
-                ],
-                center: .center,
-                startRadius: 40,
-                endRadius: 500
-            )
-            .ignoresSafeArea()
+            TableBackground()
+                .ignoresSafeArea()
 
-            HStack(spacing: 0) {
-                VStack(spacing: 16) {
+            HStack(spacing: 20) {
+                VStack(spacing: 18) {
                     titleSection
-
-                    VStack(spacing: 10) {
-                        menuButton("New Game", icon: "play.fill", color: Color(red: 0.10, green: 0.56, blue: 0.20)) {
-                            onNewGame()
-                        }
-
-                        menuButton("Settings", icon: "gearshape.fill", color: Color(red: 0.50, green: 0.30, blue: 0.12)) {
-                            onSettings()
-                        }
-
-                        HStack(spacing: 10) {
-                            smallButton("Stats", icon: "trophy.fill") { onStats() }
-                            howToPlayButton
-                        }
-
+                    MenuFan()
+                    HStack(spacing: 8) {
+                        howToPlayButton
+                        secondaryButton("Stats", icon: "trophy.fill", action: onStats)
+                        secondaryButton("Settings", icon: "gearshape.fill", action: onSettings)
                     }
                 }
                 .frame(maxWidth: .infinity)
 
-                if showingHowToPlay {
-                    HowToPlayCard(
-                        initialLanguage: howToPlayLabelIndex,
-                        onDismiss: {
-                            withAnimation(.spring(duration: 0.3)) {
-                                showingHowToPlay = false
-                            }
-                        }
-                    )
-                    .frame(maxWidth: 360)
-                    .transition(.move(edge: .trailing).combined(with: .opacity))
-                }
+                newGameCard
+                    .frame(width: 256)
             }
-            .padding(.horizontal, 24)
+            .padding(.horizontal, 20)
+            .padding(.vertical, 12)
         }
+        .dynamicTypeSize(...DynamicTypeSize.xxLarge)
+        .task(id: statsVersion) { await loadStats() }
         .onAppear {
-            if !hasSeenRules {
-                var transaction = Transaction()
-                transaction.disablesAnimations = true
-                withTransaction(transaction) {
-                    showingHowToPlay = true
-                }
-                hasSeenRules = true
-            }
-            withAnimation(.easeInOut(duration: 2.0).repeatForever(autoreverses: true)) {
-                suitPulse = true
-            }
-            startLabelShuffle()
-        }
-        .onDisappear {
-            labelShuffleTimer?.invalidate()
-            labelShuffleTimer = nil
+            guard !hasSeenRules else { return }
+            hasSeenRules = true
+            onHowToPlay()
         }
     }
+
+    // MARK: - Title
 
     private var titleSection: some View {
-        VStack(spacing: 12) {
-            HStack(spacing: 4) {
-                Text("Call")
-                    .font(.system(size: 36, weight: .black, design: .rounded))
-                    .foregroundColor(.white)
-                Text("Break")
-                    .font(.system(size: 36, weight: .black, design: .rounded))
-                    .foregroundColor(Color(red: 0.92, green: 0.72, blue: 0.10))
-                Text("+")
-                    .font(.system(size: 36, weight: .black, design: .rounded))
-                    .foregroundColor(.white.opacity(0.6))
+        VStack(spacing: 4) {
+            HStack(spacing: 6) {
+                Text("Call").foregroundStyle(.white)
+                Text("Break").foregroundStyle(TablePalette.gold)
+                Text("+").foregroundStyle(.white.opacity(0.6))
             }
+            .font(.system(size: 40, weight: .black, design: .rounded))
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("Call Break Plus")
+            .accessibilityAddTraits(.isHeader)
 
-            HStack(spacing: 12) {
-                ForEach(Array(zip([Suit.spades, .hearts, .diamonds, .clubs],
-                                  [Color.white, .red, .red, .white])), id: \.0) { suit, color in
-                    ZStack {
-                        Circle()
-                            .fill(color.opacity(0.08))
-                            .frame(width: 36, height: 36)
-                        Text(suit.symbol)
-                            .font(.system(size: 22))
-                            .foregroundColor(color.opacity(suitPulse ? 0.7 : 0.4))
-                    }
-                }
-            }
+            Text("Call your hands. Break theirs.")
+                .font(TableType.body)
+                .foregroundStyle(.white.opacity(0.8))
         }
     }
 
-    private var howToPlayButton: some View {
-        Button {
-            withAnimation(.spring(duration: 0.3)) {
-                showingHowToPlay = true
+    // MARK: - New game
+
+    private var newGameCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 1) {
+                Text("New game")
+                    .font(TableType.kicker)
+                    .textCase(.uppercase)
+                    .kerning(1)
+                    .foregroundStyle(TablePalette.faded)
+                Text("Pick your table")
+                    .font(TableType.title)
+                    .foregroundStyle(TablePalette.ink)
+                    .accessibilityAddTraits(.isHeader)
             }
-        } label: {
-            HStack(spacing: 5) {
-                Image(systemName: "questionmark.circle.fill")
-                    .font(.system(size: 11, weight: .bold))
 
-                Text(howToPlayLabels[howToPlayLabelIndex])
-                    .font(.system(size: 12, weight: .bold, design: .rounded))
-                    .lineLimit(1)
-                    .id(howToPlayLabelIndex)
-                    .transition(.opacity)
-            }
-            .frame(width: 138, height: 36)
-            .background(.white.opacity(0.12))
-            .foregroundColor(.white.opacity(0.8))
-            .clipShape(Capsule())
-            .overlay(Capsule().strokeBorder(.white.opacity(0.15), lineWidth: 1))
-        }
-        .animation(.easeInOut(duration: 0.6), value: howToPlayLabelIndex)
-    }
-
-    private func startLabelShuffle() {
-        labelShuffleTimer?.invalidate()
-        labelShuffleTimer = Timer.scheduledTimer(withTimeInterval: 3.5, repeats: true) { _ in
-            Task { @MainActor in
-                withAnimation {
-                    howToPlayLabelIndex = (howToPlayLabelIndex + 1) % howToPlayLabels.count
-                }
-            }
-        }
-    }
-
-    private func menuButton(_ title: String, icon: String, color: Color, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 8) {
-                Image(systemName: icon)
-                    .font(.system(size: 14, weight: .bold))
-                Text(title)
-                    .font(.system(size: 16, weight: .bold, design: .rounded))
-            }
-            .frame(width: 180, height: 46)
-            .background(
-                LinearGradient(colors: [color, color.opacity(0.7)], startPoint: .top, endPoint: .bottom)
-            )
-            .foregroundColor(.white)
-            .clipShape(Capsule())
-            .overlay(Capsule().strokeBorder(.white.opacity(0.2), lineWidth: 1))
-            .shadow(color: color.opacity(0.3), radius: 4, y: 2)
-        }
-    }
-
-    private func smallButton(_ title: String, icon: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 5) {
-                Image(systemName: icon)
-                    .font(.system(size: 11, weight: .bold))
-                Text(title)
-                    .font(.system(size: 12, weight: .bold, design: .rounded))
-            }
-            .frame(width: 118, height: 36)
-            .background(.white.opacity(0.12))
-            .foregroundColor(.white.opacity(0.8))
-            .clipShape(Capsule())
-            .overlay(Capsule().strokeBorder(.white.opacity(0.15), lineWidth: 1))
-        }
-    }
-}
-
-// MARK: - How to Play Card
-
-struct HowToPlayCard: View {
-    let initialLanguage: Int
-    let onDismiss: () -> Void
-
-    @State private var selectedLanguage: Int = 0
-
-    private let paper = Color(red: 0.99, green: 0.93, blue: 0.76)
-    private let ink = Color(red: 0.25, green: 0.10, blue: 0.04)
-    private let faded = Color(red: 0.55, green: 0.35, blue: 0.18)
-
-    private let languages = ["English", "नेपाली", "हिंदी"]
-
-    private let rules: [[RuleItem]] = [
-        [
-            RuleItem(emoji: "🃏", text: "4 players, 13 cards each. Spades are the most powerful cards."),
-            RuleItem(emoji: "🎯", text: "Guess how many hands (1–13) you will win. You must choose at least 1."),
-            RuleItem(emoji: "🃏", text: "Follow the starting suit. If you have a higher card of that suit, you must play it."),
-            RuleItem(emoji: "♠️", text: "Out of the starting suit? You must play a Spade if you have one."),
-            RuleItem(emoji: "🏆", text: "The highest Spade wins. If no Spades are played, the highest card of the starting suit wins."),
-            RuleItem(emoji: "📊", text: "Meet your target to earn those points. Extra wins add 0.1 each. Miss your target and you lose those points."),
-            RuleItem(emoji: "5️⃣", text: "5 rounds per game. Highest total score wins!"),
-        ],
-        [
-            RuleItem(emoji: "🃏", text: "४ खेलाडी, सबैलाई १३-१३ पत्ती। हुकुम (Spades) सबैभन्दा शक्तिशाली हुन्छ।"),
-            RuleItem(emoji: "🎯", text: "आफूले जित्ने हात (१-१३) अनुमान गर्नुहोस्। कम्तीमा १ कल गर्नुपर्छ।"),
-            RuleItem(emoji: "🃏", text: "सुरुमा फालिएको रङकै पत्ती फाल्नुपर्छ। आफूसँग ठूलो पत्ती छ भने त्यही फाल्नुपर्छ।"),
-            RuleItem(emoji: "♠️", text: "त्यो रङ छैन भने, हुकुम (Spades) छ भने काट्नैपर्छ।"),
-            RuleItem(emoji: "🏆", text: "सबैभन्दा ठूलो हुकुमले जित्छ। हुकुम छैन भने सुरुको रङको सबैभन्दा ठूलो पत्तीले जित्छ।"),
-            RuleItem(emoji: "📊", text: "अनुमान मिलाएमा कल गरे बराबरको पोइन्ट पाइन्छ। बढी जितेमा +०.१ थपिन्छ। नपुगेमा कल बराबरको घट्छ।"),
-            RuleItem(emoji: "5️⃣", text: "एक गेममा ५ राउन्ड हुन्छन्। सबैभन्दा धेरै पोइन्ट हुनेले जित्छ!"),
-        ],
-        [
-            RuleItem(emoji: "🃏", text: "4 खिलाड़ी, सबको 13-13 पत्ते। हुकुम (Spades) सबसे ताकतवर होते हैं।"),
-            RuleItem(emoji: "🎯", text: "अनुमान लगाएं कि आप कितनी बार (1-13) जीतेंगे। कम से कम 1 कॉल ज़रूरी है।"),
-            RuleItem(emoji: "🃏", text: "जो रंग चला है, उसी रंग का पत्ता चलें। बड़ा पत्ता है, तो वही चलना होगा।"),
-            RuleItem(emoji: "♠️", text: "वह रंग नहीं है? आपको हुकुम (Spades) का पत्ता चलना होगा (अगर है)।"),
-            RuleItem(emoji: "🏆", text: "सबसे बड़ा हुकुम जीतता है। हुकुम नहीं? चले गए रंग का सबसे बड़ा पत्ता जीतता है।"),
-            RuleItem(emoji: "📊", text: "लक्ष्य पूरा करने पर उतने पॉइंट्स मिलते हैं। ज़्यादा जीतने पर +0.1 जुड़ता है। कम जीतने पर पॉइंट्स कटते हैं।"),
-            RuleItem(emoji: "5️⃣", text: "हर गेम में 5 राउंड। सबसे ज़्यादा स्कोर वाला जीतेगा!"),
-        ],
-    ]
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                Text("How to Play")
-                    .font(.system(size: 14, weight: .black, design: .rounded))
-                    .foregroundColor(ink)
-                Spacer()
-                Button(action: onDismiss) {
-                    Image(systemName: "xmark")
-                    .font(.system(size: 10, weight: .bold))
-                    .foregroundColor(ink)
-                    .frame(width: 22, height: 22)
-                    .background(ink.opacity(0.1), in: Circle())
-                    .frame(width: 44, height: 44)
-                    .contentShape(Rectangle())
-                    .padding(-9)
-                }
-            }
-            .padding(.horizontal, 14)
-            .padding(.top, 12)
-            .padding(.bottom, 6)
-
-            Picker("", selection: $selectedLanguage) {
-                ForEach(0..<languages.count, id: \.self) { i in
-                    Text(languages[i]).tag(i)
+            Picker("Difficulty", selection: $viewModel.botDifficulty) {
+                ForEach(BotDifficulty.allCases, id: \.self) { difficulty in
+                    Text(difficulty.title).tag(difficulty)
                 }
             }
             .pickerStyle(.segmented)
-            .padding(.horizontal, 14)
-            .padding(.bottom, 8)
 
-            ScrollView(.vertical, showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 8) {
-                    ForEach(rules[selectedLanguage]) { item in
-                        HStack(alignment: .top, spacing: 8) {
-                            Text(item.emoji)
-                                .font(.system(size: 13))
-                                .frame(width: 20)
-                            Text(item.text)
-                                .font(.system(size: 11.5, weight: .medium, design: .rounded))
-                                .foregroundColor(ink)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                    }
+            VStack(alignment: .leading, spacing: 4) {
+                Text(viewModel.botDifficulty.summary)
+                    .font(TableType.caption)
+                    .foregroundStyle(TablePalette.ink)
+                    .fixedSize(horizontal: false, vertical: true)
+                if let record = recordLine {
+                    Text(record)
+                        .font(.system(size: 11, weight: .bold, design: .rounded))
+                        .foregroundStyle(TablePalette.faded)
                 }
-                .id(selectedLanguage)
-                .padding(.horizontal, 14)
-                .padding(.bottom, 12)
             }
+            .frame(minHeight: 46, alignment: .top)
+
+            OverlayButton("Deal", action: onNewGame)
+
+            statsStrip
         }
-        .background(paper)
-        .clipShape(RoundedRectangle(cornerRadius: 12))
-        .overlay(
-            RoundedRectangle(cornerRadius: 12)
-                .strokeBorder(Color(red: 0.45, green: 0.20, blue: 0.08).opacity(0.4), lineWidth: 1)
-        )
-        .shadow(color: .black.opacity(0.2), radius: 6, y: 3)
-        .onAppear { selectedLanguage = initialLanguage }
+        .padding(16)
+        .background(TablePalette.paper, in: RoundedRectangle(cornerRadius: 16))
+        .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(TablePalette.rimBrown.opacity(0.5), lineWidth: 1.5))
+        .shadow(color: .black.opacity(0.30), radius: 14, y: 6)
+    }
+
+    private var recordLine: String? {
+        guard case .loaded(let stats) = stats else { return nil }
+        let difficulty = viewModel.botDifficulty
+        let record = stats.record(at: difficulty)
+        guard record.games > 0 else { return "You haven’t played \(difficulty.title) yet." }
+        return "You’ve won \(record.wins) of \(record.games) at \(difficulty.title)."
+    }
+
+    @ViewBuilder
+    private var statsStrip: some View {
+        switch stats {
+        case .loaded(let stats) where stats.gamesPlayed > 0:
+            VStack(spacing: 8) {
+                Rectangle().fill(TablePalette.cardRuled.opacity(0.5)).frame(height: 1)
+                HStack(spacing: 0) {
+                    stripItem("\(stats.gamesPlayed)", label: "played")
+                    stripItem(stats.winRate.formatted(.percent.precision(.fractionLength(0))), label: "won")
+                    stripItem("\(stats.longestWinStreak)", label: "best streak")
+                }
+            }
+        case .loaded:
+            Text("Finish a game to start your record.")
+                .font(TableType.caption)
+                .foregroundStyle(TablePalette.faded)
+                .frame(maxWidth: .infinity)
+        case .loading, .unavailable:
+            EmptyView()
+        }
+    }
+
+    private func stripItem(_ value: String, label: String) -> some View {
+        VStack(spacing: 0) {
+            Text(value)
+                .font(.system(size: 15, weight: .black, design: .rounded))
+                .foregroundStyle(TablePalette.ink)
+            Text(label)
+                .font(.system(size: 10, weight: .bold, design: .rounded))
+                .foregroundStyle(TablePalette.faded)
+        }
+        .frame(maxWidth: .infinity)
+        .accessibilityElement(children: .combine)
+    }
+
+    // MARK: - Secondary buttons
+
+    private var howToPlayButton: some View {
+        Button(action: onHowToPlay) {
+            HStack(spacing: 6) {
+                Image(systemName: "questionmark.circle.fill")
+                    .font(.system(size: 13, weight: .bold))
+                VStack(alignment: .leading, spacing: 0) {
+                    Text("How to play")
+                        .font(.system(size: 13, weight: .bold, design: .rounded))
+                    Text("EN · नेपाली · हिंदी")
+                        .font(.system(size: 10, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.7))
+                }
+            }
+            .modifier(MenuCapsule())
+        }
+        .buttonStyle(.plain)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("How to play")
+        .accessibilityHint("In English, Nepali and Hindi")
+        .accessibilityAddTraits(.isButton)
+    }
+
+    private func secondaryButton(_ title: String, icon: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                Image(systemName: icon)
+                    .font(.system(size: 13, weight: .bold))
+                Text(title)
+                    .font(.system(size: 13, weight: .bold, design: .rounded))
+            }
+            .modifier(MenuCapsule())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func loadStats() async {
+        guard let repo = viewModel.statsRepository else {
+            stats = .unavailable
+            return
+        }
+        do {
+            stats = .loaded(try await repo.fetchStats())
+        } catch {
+            stats = .unavailable
+        }
     }
 }
 
-private struct RuleItem: Identifiable {
-    let id = UUID()
-    let emoji: String
-    let text: String
+private struct MenuCapsule: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .foregroundStyle(.white)
+            .lineLimit(1)
+            .fixedSize()
+            .padding(.horizontal, 12)
+            .frame(minHeight: 44)
+            .background(.black.opacity(0.30), in: Capsule())
+            .overlay(Capsule().strokeBorder(.white.opacity(0.18), lineWidth: 1))
+            .contentShape(Capsule())
+    }
+}
+
+/// A fanned hand of real cards under the logo.
+private struct MenuFan: View {
+    private let cards: [Card] = [
+        Card(suit: .spades, rank: .ten),
+        Card(suit: .hearts, rank: .jack),
+        Card(suit: .clubs, rank: .queen),
+        Card(suit: .diamonds, rank: .king),
+        Card(suit: .spades, rank: .ace),
+    ]
+
+    var body: some View {
+        ZStack {
+            ForEach(cards.indices, id: \.self) { index in
+                let offset = Double(index) - Double(cards.count - 1) / 2
+                CardView(card: cards[index])
+                    .scaleEffect(0.82)
+                    .rotationEffect(.degrees(offset * 9), anchor: .bottom)
+                    .offset(x: offset * 30, y: abs(offset) * 4)
+            }
+        }
+        .frame(width: 230, height: 96)
+        .accessibilityHidden(true)
+    }
+}
+
+extension BotDifficulty {
+    var title: String {
+        switch self {
+        case .beginner: "Easy"
+        case .intermediate: "Medium"
+        case .advanced: "Hard"
+        }
+    }
+
+    /// One line on how the bots play at this level.
+    var summary: String {
+        switch self {
+        case .beginner: "Bots take a trick when they can and never plan ahead."
+        case .intermediate: "Bots track broken suits and duck once they’ve made their call."
+        case .advanced: "Bots count cards and stop you one trick short of your call."
+        }
+    }
+}
+
+extension PlayerStats {
+    func record(at difficulty: BotDifficulty) -> (wins: Int, games: Int) {
+        switch difficulty {
+        case .beginner: (beginnerWins, beginnerGames)
+        case .intermediate: (intermediateWins, intermediateGames)
+        case .advanced: (advancedWins, advancedGames)
+        }
+    }
 }

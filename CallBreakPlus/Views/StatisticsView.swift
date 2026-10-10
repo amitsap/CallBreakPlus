@@ -1,230 +1,283 @@
 import SwiftUI
 
 struct StatisticsView: View {
-    let statsRepository: (any StatsRepository)?
-    let statsUnavailable: Bool
-    @State private var stats = PlayerStats()
-    @State private var recentGames: [GameSummary] = []
-    @State private var loadError: String?
-    @Environment(\.dismiss) private var dismiss
+    let viewModel: GameViewModel
+    /// Offered on the first-run state when a new game can start from here (the menu, not Pause).
+    let onDealGame: (() -> Void)?
+    @State private var model: StatisticsModel
+    @State private var showingResetConfirmation = false
+    @State private var showingInsights = false
+    @State private var insightsDifficulty: BotDifficulty?
+    @Environment(ProStore.self) private var proStore
+    @Environment(\.openProPanel) private var openProPanel
 
-    private let paper = Color(red: 0.99, green: 0.93, blue: 0.76)
-    private let ink = Color(red: 0.25, green: 0.10, blue: 0.04)
-    private let faded = Color(red: 0.55, green: 0.35, blue: 0.18)
-    private let ruled = Color(red: 0.82, green: 0.62, blue: 0.36).opacity(0.35)
-    private let green = Color(red: 0.10, green: 0.56, blue: 0.20)
+    init(viewModel: GameViewModel, onDealGame: (() -> Void)?) {
+        self.viewModel = viewModel
+        self.onDealGame = onDealGame
+        _model = State(initialValue: StatisticsModel(repository: viewModel.statsRepository))
+    }
 
     var body: some View {
-        ZStack {
-            LinearGradient(
-                colors: [
-                    Color(red: 0.76, green: 0.43, blue: 0.16),
-                    Color(red: 0.42, green: 0.20, blue: 0.08),
-                ],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-            .ignoresSafeArea()
+        VStack(alignment: .leading, spacing: 0) {
+            header
 
-            HStack(spacing: 14) {
-                notepadCard {
-                    VStack(spacing: 0) {
-                        sectionLabel("Overview", icon: "chart.pie.fill")
-                        ruledRow("Played", value: "\(stats.gamesPlayed)")
-                        ruledRow("Won", value: "\(stats.gamesWon)")
-                        ruledRow("Win Rate", value: pct(stats.winRate), valueColor: green)
-                        ruledRow("Best Round", value: String(format: "%.1f", stats.bestRoundScore))
-                        ruledRow("Bid Accuracy", value: pct(stats.bidAccuracy), valueColor: green)
-                        ruledRow("Average Score", value: String(format: "%.1f", stats.averageScore), last: true)
-                    }
+            content
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .task { await model.load() }
+        .onChange(of: proStore.hasPro) { _, hasPro in
+            // A refund closes Insights; the page behind it shows the locked card.
+            if !hasPro { showingInsights = false }
+        }
+        .alert("Reset Statistics?", isPresented: $showingResetConfirmation) {
+            Button("Cancel", role: .cancel) { }
+            Button("Reset", role: .destructive) {
+                Task { await model.reset() }
+            }
+        } message: {
+            Text("All game records will be permanently deleted.")
+        }
+        .alert("Statistics could not be reset", isPresented: $model.resetFailed) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text("Your records are unchanged. Please try again.")
+        }
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        switch model.state {
+        case .loading:
+            VStack(spacing: 10) {
+                ProgressView()
+                    .tint(TablePalette.faded)
+                Text("Loading your games…")
+                    .font(TableType.body)
+                    .foregroundStyle(TablePalette.faded)
+            }
+        case .empty:
+            emptyState
+        case .failed:
+            failedState
+        case .loaded(let stats, let history):
+            if showingInsights {
+                InsightsPage(history: history, difficulty: $insightsDifficulty, scoreText: viewModel.scoreString)
+                    .padding(.horizontal, 20)
+                    .padding(.top, 10)
+            } else {
+                loadedState(stats, history: history)
+            }
+        }
+    }
+
+    private var header: some View {
+        HStack(spacing: 2) {
+            if showingInsights {
+                Button {
+                    showingInsights = false
+                } label: {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 16, weight: .black))
+                        .foregroundStyle(TablePalette.ink)
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Back to Statistics")
+                .padding(.leading, -12)
+            }
+            Text(showingInsights ? "Insights" : "Statistics")
+                .font(TableType.title)
+                .foregroundStyle(TablePalette.ink)
+                .accessibilityAddTraits(.isHeader)
+        }
+        .frame(minHeight: 44)
+        .padding(.top, 6)
+        .padding(.horizontal, 20)
+    }
+
+    // MARK: - First run and failure
+
+    private var emptyState: some View {
+        VStack(spacing: 8) {
+            ZStack {
+                ForEach(0..<3, id: \.self) { index in
+                    let offset = Double(index - 1)
+                    CardView(card: Card(suit: .spades, rank: .ace), isFaceUp: false, cardBack: viewModel.effectiveCardBack)
+                        .scaleEffect(0.6)
+                        .rotationEffect(.degrees(offset * 10), anchor: .bottom)
+                        .offset(x: offset * 18)
+                }
+            }
+            .frame(height: 64)
+            .accessibilityHidden(true)
+
+            Text("No games yet")
+                .font(TableType.title)
+                .foregroundStyle(TablePalette.ink)
+            Text("Finish a game and your win rate, calls made and streaks show up here.")
+                .font(TableType.body)
+                .foregroundStyle(TablePalette.faded)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 320)
+            if let onDealGame {
+                OverlayButton("Deal a game", action: onDealGame)
+                    .frame(width: 200)
+                    .padding(.top, 6)
+            }
+            unavailableNotice
+        }
+        .padding(.horizontal, 20)
+    }
+
+    private var failedState: some View {
+        VStack(spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 30, weight: .bold))
+                .foregroundStyle(TablePalette.thokOrange)
+                .accessibilityHidden(true)
+            Text("Statistics couldn’t be loaded")
+                .font(TableType.title)
+                .foregroundStyle(TablePalette.ink)
+            Text("Something went wrong reading your games. Try again.")
+                .font(TableType.body)
+                .foregroundStyle(TablePalette.faded)
+                .multilineTextAlignment(.center)
+            OverlayButton("Retry") {
+                Task { await model.load() }
+            }
+            .frame(width: 200)
+            .padding(.top, 6)
+        }
+        .padding(.horizontal, 20)
+    }
+
+    // MARK: - Loaded
+
+    private func loadedState(_ stats: PlayerStats, history: [GameSummary]) -> some View {
+        ScrollView(.vertical, showsIndicators: false) {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(spacing: 8) {
+                    tile("Played", value: "\(stats.gamesPlayed)", detail: "\(stats.gamesWon) won")
+                    tile("Win rate", value: percent(stats.winRate), detail: nil)
+                    tile("Calls made", value: percent(stats.bidAccuracy), detail: "\(stats.bidsMet) of \(stats.totalBids)")
+                    tile("Best streak", value: "\(stats.longestWinStreak)", detail: "now \(stats.currentWinStreak)")
                 }
 
-                VStack(spacing: 10) {
-                    notepadCard {
-                        VStack(spacing: 0) {
-                            sectionLabel("Streaks", icon: "flame.fill")
-                            ruledRow("Current", value: "\(stats.currentWinStreak)", valueColor: stats.currentWinStreak > 0 ? green : ink)
-                            ruledRow("Longest", value: "\(stats.longestWinStreak)", last: true)
-                        }
-                    }
+                HStack(alignment: .top, spacing: 24) {
+                    InsightsCard(history: history, hasPro: proStore.hasPro, onOpen: { showingInsights = true }, onUnlock: { openProPanel?() })
+                        .frame(maxWidth: .infinity, alignment: .leading)
 
-                    notepadCard {
-                        VStack(spacing: 0) {
-                            sectionLabel("By Difficulty", icon: "slider.horizontal.3")
-                            diffRow("Easy", games: stats.beginnerGames, wins: stats.beginnerWins)
-                            diffRow("Medium", games: stats.intermediateGames, wins: stats.intermediateWins)
-                            diffRow("Hard", games: stats.advancedGames, wins: stats.advancedWins, last: true)
+                    VStack(alignment: .leading, spacing: 8) {
+                        columnHeading("By difficulty")
+                        ForEach(BotDifficulty.allCases, id: \.self) { difficulty in
+                            difficultyRow(difficulty, record: stats.record(at: difficulty))
                         }
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
 
-                    if !recentGames.isEmpty {
-                        notepadCard {
-                            VStack(spacing: 0) {
-                                sectionLabel("Recent Games", icon: "clock.arrow.circlepath")
-                                ForEach(Array(recentGames.enumerated()), id: \.element.id) { index, game in
-                                    recentGameRow(game, last: index == recentGames.count - 1)
-                                }
-                            }
+                    VStack(alignment: .leading, spacing: 8) {
+                        columnHeading("Recent")
+                        ForEach(history.prefix(3)) { game in
+                            GameRow(won: game.won, date: game.date, detail: GameRow.detail(game.difficulty, roundCount: game.roundCount), score: viewModel.scoreString(game.totalScore))
                         }
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+
+                HStack(alignment: .center) {
+                    unavailableNotice
+                    Spacer(minLength: 12)
+                    Button("Reset statistics…") { showingResetConfirmation = true }
+                        .font(.system(size: 13, weight: .bold, design: .rounded))
+                        .foregroundStyle(TablePalette.destructiveRed)
+                        .frame(minHeight: 44)
+                        .buttonStyle(.plain)
                 }
             }
             .padding(.horizontal, 20)
-            .padding(.vertical, 12)
-        }
-        .overlay(alignment: .topTrailing) {
-            Button { dismiss() } label: {
-                Image(systemName: "xmark")
-                    .font(.system(size: 11, weight: .bold))
-                    .foregroundColor(ink)
-                    .frame(width: 26, height: 26)
-                    .background(paper.opacity(0.9), in: Circle())
-                    .shadow(color: .black.opacity(0.1), radius: 2, y: 1)
-                    .frame(width: 44, height: 44)
-                    .contentShape(Rectangle())
-                    .padding(-9)
-            }
             .padding(.top, 10)
-            .padding(.trailing, 14)
-        }
-        .overlay(alignment: .bottom) {
-            if statsUnavailable {
-                notepadCard {
-                    Text("Stats can't be saved on this device right now. This session's numbers are temporary.")
-                        .font(.system(size: 10, weight: .medium, design: .rounded))
-                        .foregroundColor(faded)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                }
-                .padding(.bottom, 10)
-            }
-        }
-        .task {
-            if let repo = statsRepository {
-                do {
-                    stats = try await repo.fetchStats()
-                    recentGames = try await repo.fetchRecentGames(limit: 3)
-                } catch {
-                    loadError = "Statistics could not be loaded. Please try again."
-                }
-            }
-        }
-        .alert("Statistics Unavailable", isPresented: Binding(
-            get: { loadError != nil },
-            set: { if !$0 { loadError = nil } }
-        )) {
-            Button("OK", role: .cancel) { loadError = nil }
-        } message: {
-            Text(loadError ?? "")
+            .padding(.bottom, 6)
         }
     }
 
-    private func notepadCard<Content: View>(@ViewBuilder content: () -> Content) -> some View {
-        VStack(spacing: 0) {
-            content()
+    @ViewBuilder
+    private var unavailableNotice: some View {
+        if viewModel.statsUnavailable {
+            Text("Stats can’t be saved on this device right now. This session’s numbers are temporary.")
+                .font(TableType.caption)
+                .foregroundStyle(TablePalette.faded)
         }
-        .background(paper)
-        .clipShape(RoundedRectangle(cornerRadius: 10))
-        .overlay(
-            RoundedRectangle(cornerRadius: 10)
-                .strokeBorder(Color(red: 0.45, green: 0.20, blue: 0.08).opacity(0.4), lineWidth: 1)
-        )
-        .shadow(color: .black.opacity(0.15), radius: 4, y: 2)
     }
 
-    private func sectionLabel(_ title: String, icon: String) -> some View {
-        HStack(spacing: 5) {
-            Image(systemName: icon)
-                .font(.system(size: 9))
-                .foregroundColor(faded)
-            Text(title)
+    private func tile(_ label: String, value: String, detail: String?) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(label)
                 .font(.system(size: 10, weight: .heavy, design: .rounded))
-                .foregroundColor(faded)
                 .textCase(.uppercase)
-                .tracking(1)
-            Spacer()
+                .kerning(0.8)
+                .foregroundStyle(TablePalette.faded)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+            HStack(alignment: .lastTextBaseline, spacing: 6) {
+                Text(value)
+                    .font(.system(size: 24, weight: .black, design: .rounded))
+                    .foregroundStyle(TablePalette.ink)
+                    .lineLimit(1)
+                    .fixedSize()
+                Spacer(minLength: 0)
+                if let detail {
+                    Text(detail)
+                        .font(.system(size: 11, weight: .bold, design: .rounded))
+                        .foregroundStyle(TablePalette.faded)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                }
+            }
         }
         .padding(.horizontal, 12)
-        .padding(.top, 8)
-        .padding(.bottom, 4)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.white.opacity(0.55), in: RoundedRectangle(cornerRadius: 12))
+        .accessibilityElement(children: .combine)
     }
 
-    private func ruledRow(_ label: String, value: String, valueColor: Color? = nil, last: Bool = false) -> some View {
-        VStack(spacing: 0) {
-            HStack {
-                Text(label)
-                    .font(.system(size: 13, weight: .semibold, design: .rounded))
-                    .foregroundColor(ink)
-                Spacer()
-                Text(value)
-                    .font(.system(size: 14, weight: .black, design: .rounded))
-                    .foregroundColor(valueColor ?? ink)
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-
-            if !last {
-                Rectangle().fill(ruled).frame(height: 1).padding(.leading, 12)
-            }
-        }
+    private func columnHeading(_ title: String) -> some View {
+        Text(title)
+            .font(TableType.headline)
+            .foregroundStyle(TablePalette.ink)
+            .accessibilityAddTraits(.isHeader)
     }
 
-    private func diffRow(_ label: String, games: Int, wins: Int, last: Bool = false) -> some View {
-        VStack(spacing: 0) {
-            HStack {
-                Text(label)
-                    .font(.system(size: 13, weight: .semibold, design: .rounded))
-                    .foregroundColor(ink)
-                Spacer()
-                HStack(spacing: 2) {
-                    Text("\(wins)")
-                        .font(.system(size: 14, weight: .black, design: .rounded))
-                        .foregroundColor(green)
-                    Text("/")
-                        .font(.system(size: 10))
-                        .foregroundColor(faded)
-                    Text("\(games)")
-                        .font(.system(size: 14, weight: .black, design: .rounded))
-                        .foregroundColor(ink)
+    private func difficultyRow(_ difficulty: BotDifficulty, record: (wins: Int, games: Int)) -> some View {
+        let rate = record.games > 0 ? Double(record.wins) / Double(record.games) : 0
+        return HStack(spacing: 8) {
+            Text(difficulty.title)
+                .font(TableType.body)
+                .foregroundStyle(TablePalette.ink)
+                .frame(width: 58, alignment: .leading)
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(TablePalette.cardRuled.opacity(0.35))
+                    Capsule()
+                        .fill(TablePalette.accentGreen)
+                        .frame(width: geo.size.width * rate)
                 }
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-
-            if !last {
-                Rectangle().fill(ruled).frame(height: 1).padding(.leading, 12)
-            }
+            .frame(height: 8)
+            Text(record.games > 0 ? "\(record.wins) of \(record.games)" : "Not played")
+                .font(.system(size: 12, weight: .bold, design: .rounded))
+                .foregroundStyle(record.games > 0 ? TablePalette.ink : TablePalette.faded)
+                .frame(width: 70, alignment: .trailing)
         }
+        .frame(minHeight: 22)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(record.games > 0
+            ? "\(difficulty.title): won \(record.wins) of \(record.games)"
+            : "\(difficulty.title): not played")
     }
 
-    private func pct(_ v: Double) -> String {
-        String(format: "%.0f%%", v * 100)
-    }
-
-    private func recentGameRow(_ game: GameSummary, last: Bool) -> some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 8) {
-                Image(systemName: game.won ? "checkmark.circle.fill" : "xmark.circle.fill")
-                    .foregroundColor(game.won ? green : .red)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(game.won ? "Win" : "Loss")
-                        .font(.system(size: 12, weight: .bold, design: .rounded))
-                    Text(game.date, format: .dateTime.month(.abbreviated).day())
-                        .font(.system(size: 9, weight: .medium, design: .rounded))
-                        .foregroundColor(faded)
-                }
-                Spacer()
-                Text(String(format: "%.0f%% bids", game.bidAccuracy * 100))
-                    .font(.system(size: 9, weight: .semibold, design: .rounded))
-                    .foregroundColor(faded)
-                Text(String(format: "%.1f", game.totalScore))
-                    .font(.system(size: 13, weight: .black, design: .rounded))
-                    .foregroundColor(ink)
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 5)
-            if !last { Rectangle().fill(ruled).frame(height: 1).padding(.leading, 12) }
-        }
+    private func percent(_ value: Double) -> String {
+        value.formatted(.percent.precision(.fractionLength(0)))
     }
 }

@@ -2,16 +2,27 @@ import SwiftUI
 
 enum TablePalette {
     static let paper = Color(red: 0.99, green: 0.93, blue: 0.76)
+    /// A panel's sidebar, a shade under the paper.
+    static let paperShade = Color(red: 0.95, green: 0.87, blue: 0.67)
     static let ink = Color(red: 0.25, green: 0.10, blue: 0.04)
     static let faded = Color(red: 0.55, green: 0.35, blue: 0.18)
     static let accentGreen = Color(red: 0.10, green: 0.56, blue: 0.20)
+    /// Green and gold for text on paper, at least 4.5:1 against it.
+    static let paperGreen = Color(red: 0.05, green: 0.42, blue: 0.14)
+    static let paperGold = Color(red: 0.55, green: 0.36, blue: 0.0)
     static let gold = Color(red: 1.0, green: 0.82, blue: 0.24)
+    /// A call that is made, on the felt.
+    static let madeGreen = Color(red: 0.24, green: 0.86, blue: 0.52)
     static let scrim = Color.black.opacity(0.42)
     static let woodButton = Color(red: 0.50, green: 0.30, blue: 0.12)
     static let destructiveRed = Color(red: 0.80, green: 0.18, blue: 0.14)
     static let rimBrown = Color(red: 0.48, green: 0.20, blue: 0.09)
     static let cardRuled = Color(red: 0.82, green: 0.62, blue: 0.36)
     static let bidBrown = Color(red: 0.34, green: 0.14, blue: 0.07)
+    static let medalGold = Color(red: 0.86, green: 0.62, blue: 0.08)
+    static let medalSilver = Color(red: 0.62, green: 0.66, blue: 0.72)
+    static let medalBronze = Color(red: 0.72, green: 0.42, blue: 0.20)
+    static let thokOrange = Color(red: 0.82, green: 0.38, blue: 0.12)
 }
 
 struct TableOverlayCard<Content: View>: View {
@@ -39,35 +50,6 @@ struct TableOverlayCard<Content: View>: View {
             .background(TablePalette.paper.opacity(paperOpacity), in: RoundedRectangle(cornerRadius: 18))
             .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(TablePalette.rimBrown.opacity(0.5), lineWidth: 1.5))
             .shadow(color: .black.opacity(0.30), radius: 16, y: 6)
-    }
-}
-
-struct OverlayUtilityButton: View {
-    let title: String
-    let icon: String
-    let action: () -> Void
-
-    init(_ title: String, icon: String, action: @escaping () -> Void) {
-        self.title = title
-        self.icon = icon
-        self.action = action
-    }
-
-    var body: some View {
-        Button(action: action) {
-            VStack(spacing: 5) {
-                Image(systemName: icon)
-                    .font(.system(size: 13, weight: .bold))
-                Text(title)
-                    .font(.system(size: 10, weight: .bold, design: .rounded))
-                    .lineLimit(1)
-            }
-            .foregroundStyle(TablePalette.ink.opacity(0.78))
-            .frame(maxWidth: .infinity)
-            .frame(height: 44)
-            .background(TablePalette.ink.opacity(0.06), in: RoundedRectangle(cornerRadius: 9))
-        }
-        .buttonStyle(.plain)
     }
 }
 

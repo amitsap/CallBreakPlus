@@ -12,8 +12,10 @@ struct GameSummary: Identifiable, Sendable {
     let won: Bool
     let difficulty: BotDifficulty
     let totalScore: Double
-    let bidAccuracy: Double
+    let bidsMet: Int
+    let totalBids: Int
     let date: Date
+    let roundCount: Int
 }
 
 struct GameResult: Sendable {
@@ -24,6 +26,7 @@ struct GameResult: Sendable {
     let bids: [Int]
     let tricksWon: [Int]
     let date: Date
+    let roundCount: Int
 }
 
 struct PlayerStats: Sendable {
@@ -41,6 +44,7 @@ struct PlayerStats: Sendable {
     var intermediateWins: Int = 0
     var advancedGames: Int = 0
     var advancedWins: Int = 0
+    /// Over standard 5-round games only, since a game's length scales its score.
     var averageScore: Double = 0
 
     var winRate: Double {

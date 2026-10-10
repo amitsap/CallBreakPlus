@@ -304,6 +304,150 @@ struct LegalMoveRulesOffTests {
     }
 }
 
+@Suite("Legal Moves — Restrictions")
+struct LegalMoveRestrictionTests {
+    let rules = RuleSet.standard
+
+    /// The cards a restriction allows, derived independently of `legalCards`.
+    private func permitted(by restriction: PlayRestriction, in hand: [Card]) -> [Card] {
+        switch restriction {
+        case .none: hand
+        case .followSuit(let suit): hand.filter { $0.suit == suit }
+        case .beat(let target): hand.filter { $0.suit == target.suit && $0.rank > target.rank }
+        case .trump: hand.filter { $0.suit == .spades }
+        case .overtrump(let target): hand.filter { $0.suit == .spades && $0.rank > target.rank }
+        }
+    }
+
+    /// Asserts the restriction, that `legalCards` agrees with it, and the message.
+    private func check(
+        _ hand: [Card], _ trick: Trick?, rules: RuleSet? = nil,
+        is expected: PlayRestriction, says message: String?
+    ) {
+        let rules = rules ?? self.rules
+        let restriction = LegalMoves.restriction(for: hand, in: trick, rules: rules)
+        #expect(restriction == expected)
+        #expect(LegalMoves.legalCards(for: hand, in: trick, rules: rules) == permitted(by: restriction, in: hand))
+        #expect(GameViewModel.unavailableCardMessage(hand: hand, trick: trick, rules: rules) == message)
+    }
+
+    @Test func leadingIsUnrestricted() {
+        check([card(.ace, .spades), card(.two, .clubs)], nil, is: .none, says: nil)
+    }
+
+    @Test func voidInLedSuitAndSpadesIsUnrestricted() {
+        let trick = Trick(firstPlay: TrickPlay(seat: .right, card: card(.ten, .hearts)))
+        check([card(.ace, .diamonds), card(.king, .clubs)], trick, is: .none, says: nil)
+    }
+
+    @Test func freeDiscardWhenCantOvertrumpIsUnrestricted() {
+        let trick = Trick(ledSuit: .hearts, plays: [
+            TrickPlay(seat: .right, card: card(.ten, .hearts)),
+            TrickPlay(seat: .top, card: card(.king, .spades)),
+        ])
+        check([card(.three, .spades), card(.two, .diamonds)], trick, is: .none, says: nil)
+    }
+
+    @Test func followSuitOnceTrickIsTrumped() {
+        let trick = Trick(ledSuit: .clubs, plays: [
+            TrickPlay(seat: .top, card: card(.eight, .clubs)),
+            TrickPlay(seat: .left, card: card(.two, .spades)),
+        ])
+        check(
+            [card(.six, .clubs), card(.king, .clubs), card(.four, .hearts), card(.six, .spades)], trick,
+            is: .followSuit(.clubs),
+            says: "Follow Clubs. The trick is trumped, so any club is allowed."
+        )
+    }
+
+    @Test func followSuitWhenNothingBeatsTheHighest() {
+        let trick = Trick(firstPlay: TrickPlay(seat: .right, card: card(.ten, .hearts)))
+        check(
+            [card(.three, .hearts), card(.five, .hearts), card(.two, .clubs)], trick,
+            is: .followSuit(.hearts),
+            says: "Follow Hearts. None of yours beats the 10♥, so any heart is allowed."
+        )
+    }
+
+    @Test func followSuitWithoutMustGoHigher() {
+        let trick = Trick(firstPlay: TrickPlay(seat: .right, card: card(.ten, .hearts)))
+        check(
+            [card(.three, .hearts), card(.king, .hearts), card(.two, .clubs)], trick,
+            rules: RuleSet(mustGoHigher: false),
+            is: .followSuit(.hearts),
+            says: "Follow Hearts."
+        )
+    }
+
+    @Test func beatWithTheOnlyHigherCard() {
+        let trick = Trick(firstPlay: TrickPlay(seat: .right, card: card(.king, .hearts)))
+        check(
+            [card(.three, .hearts), card(.ace, .hearts), card(.two, .clubs)], trick,
+            is: .beat(card(.king, .hearts)),
+            says: "Beat the K♥: play your A♥."
+        )
+    }
+
+    @Test func beatWithAnyOfSeveralHigherCards() {
+        let trick = Trick(ledSuit: .hearts, plays: [
+            TrickPlay(seat: .right, card: card(.five, .hearts)),
+            TrickPlay(seat: .top, card: card(.ten, .hearts)),
+        ])
+        check(
+            [card(.three, .hearts), card(.king, .hearts), card(.ace, .hearts)], trick,
+            is: .beat(card(.ten, .hearts)),
+            says: "Beat the 10♥ with a higher heart."
+        )
+    }
+
+    @Test func trumpWhenOutOfLedSuit() {
+        let trick = Trick(firstPlay: TrickPlay(seat: .right, card: card(.ten, .hearts)))
+        check(
+            [card(.ace, .spades), card(.five, .spades), card(.king, .diamonds)], trick,
+            is: .trump,
+            says: "You’re out of hearts, so you must play a Spade."
+        )
+    }
+
+    @Test func strictVariantTrumpsWhenCantOvertrump() {
+        let trick = Trick(ledSuit: .hearts, plays: [
+            TrickPlay(seat: .right, card: card(.ten, .hearts)),
+            TrickPlay(seat: .top, card: card(.king, .spades)),
+        ])
+        check(
+            [card(.three, .spades), card(.five, .spades), card(.two, .diamonds)], trick,
+            rules: RuleSet(canDiscardWhenCantOvertrump: false),
+            is: .trump,
+            says: "You’re out of hearts, so you must play a Spade."
+        )
+    }
+
+    @Test func overtrumpWithTheOnlyHigherSpade() {
+        // The audit's T2 case: tapping the 5♠ here used to say "You must play a Spade".
+        let trick = Trick(ledSuit: .hearts, plays: [
+            TrickPlay(seat: .right, card: card(.ten, .hearts)),
+            TrickPlay(seat: .top, card: card(.jack, .spades)),
+        ])
+        check(
+            [card(.five, .spades), card(.king, .spades), card(.two, .diamonds)], trick,
+            is: .overtrump(card(.jack, .spades)),
+            says: "Beat the J♠: play your K♠."
+        )
+    }
+
+    @Test func overtrumpWithAnyOfSeveralHigherSpades() {
+        let trick = Trick(ledSuit: .hearts, plays: [
+            TrickPlay(seat: .right, card: card(.ten, .hearts)),
+            TrickPlay(seat: .top, card: card(.queen, .spades)),
+        ])
+        check(
+            [card(.five, .spades), card(.king, .spades), card(.ace, .spades), card(.two, .diamonds)], trick,
+            is: .overtrump(card(.queen, .spades)),
+            says: "Beat the Q♠ with a higher Spade."
+        )
+    }
+}
+
 // MARK: - Trick Resolution Tests
 
 @Suite("Trick Resolution")
@@ -356,6 +500,38 @@ struct TrickResolutionTests {
             TrickPlay(seat: .left, card: card(.two, .spades)),
         ])
         #expect(TrickResolver.winner(of: trick) == .right)
+    }
+
+    // The winning ring reads partial tricks, which always hold the lead card.
+
+    @Test func leadAloneIsWinning() {
+        let trick = Trick(firstPlay: TrickPlay(seat: .top, card: card(.nine, .hearts)))
+        #expect(TrickResolver.winner(of: trick) == .top)
+    }
+
+    @Test func higherFollowTakesTheLeadInTwoPlays() {
+        let trick = Trick(ledSuit: .hearts, plays: [
+            TrickPlay(seat: .top, card: card(.nine, .hearts)),
+            TrickPlay(seat: .left, card: card(.king, .hearts)),
+        ])
+        #expect(TrickResolver.winner(of: trick) == .left)
+    }
+
+    @Test func offSuitDiscardDoesNotTakeTheLeadInTwoPlays() {
+        let trick = Trick(ledSuit: .hearts, plays: [
+            TrickPlay(seat: .top, card: card(.nine, .hearts)),
+            TrickPlay(seat: .left, card: card(.ace, .clubs)),
+        ])
+        #expect(TrickResolver.winner(of: trick) == .top)
+    }
+
+    @Test func trumpTakesTheLeadInThreePlays() {
+        let trick = Trick(ledSuit: .hearts, plays: [
+            TrickPlay(seat: .top, card: card(.nine, .hearts)),
+            TrickPlay(seat: .left, card: card(.king, .hearts)),
+            TrickPlay(seat: .bottom, card: card(.two, .spades)),
+        ])
+        #expect(TrickResolver.winner(of: trick) == .bottom)
     }
 }
 

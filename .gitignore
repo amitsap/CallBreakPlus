@@ -38,6 +38,7 @@ Pods/
 ## Screenshot pipeline intermediates
 screenshots/raw/
 screenshots/raw2.1/
+screenshots/raw3.0/
 
 # Private development process and publication boundaries
 NEXT_STEPS.md
